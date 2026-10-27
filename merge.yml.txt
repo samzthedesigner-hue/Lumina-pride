@@ -1,0 +1,67 @@
+name: Merge and convert to GGUF
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_name:
+        description: "Name for the merged model"
+        default: "AEGIS-Mini"
+        required: true
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install tools
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake build-essential
+          pip install mergekit
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Write merge config
+        run: |
+          cat > config.yaml << 'EOF'
+          models:
+            - model: Qwen/Qwen2.5-0.5B-Instruct
+              parameters:
+                weight: 0.5
+            - model: Qwen/Qwen2.5-Coder-0.5B-Instruct
+              parameters:
+                weight: 0.5
+          merge_method: linear
+          tokenizer_source: Qwen/Qwen2.5-0.5B-Instruct
+          dtype: bfloat16
+          EOF
+
+      - name: Merge weights
+        run: mergekit-yaml config.yaml ./merged --copy-tokenizer
+
+      - name: Get llama.cpp
+        run: |
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp
+          pip install -r llama.cpp/requirements/requirements-convert_hf_to_gguf.txt
+          cmake -S llama.cpp -B llama.cpp/build -DLLAMA_CURL=OFF
+          cmake --build llama.cpp/build --target llama-quantize -j 4
+
+      - name: Convert to GGUF (f16)
+        run: |
+          python llama.cpp/convert_hf_to_gguf.py ./merged \
+            --outtype f16 \
+            --model-name "${{ inputs.model_name }}" \
+            --outfile model-f16.gguf
+
+      - name: Quantize to Q4_0
+        run: |
+          ./llama.cpp/build/bin/llama-quantize model-f16.gguf \
+            "${{ inputs.model_name }}-Q4_0.gguf" Q4_0
+
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.model_name }}-Q4_0
+          path: ${{ inputs.model_name }}-Q4_0.gguf
+          retention-days: 7
