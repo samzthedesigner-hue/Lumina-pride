@@ -5,7 +5,7 @@ on:
     inputs:
       model_name:
         description: "Name for the merged model"
-        default: "AEGIS-Mini"
+        default: "Lumina-pride"
         required: true
 
 jobs:
